@@ -20,10 +20,14 @@ namespace inflate {
     typedef int Code;
     typedef int Symbol;
 
-    Node* build_tree(const std::vector<Range>&);
-    Symbol read_out(Node* huffman_tree, ifbstream& in);
+    class Decodertype;
+    class huffmantree;
+    typedef huffmantree Decoder;
 
-    std::pair<Node*, Node*> read_deflate_header(ifbstream& in);
+    Decoder build_decoder(const std::vector<Range>&);
+    Symbol read_out(Decoder huffman_tree, ifbstream& in);
+
+    std::pair<Decoder, Decoder> read_deflate_header(ifbstream& in);
 
     /* Decodes a inflate block into the output ostream, 
      * also returning the last max_buffer_size bytes as a stream,
@@ -31,10 +35,10 @@ namespace inflate {
      * for mid-stream blocks. */
     ringbuffer& inflate_block(ifbstream& in, 
             std::ostream& output=std::cout,
-            bool fixedtree=false);
+            bool fixedcode=false);
     ringbuffer& inflate_block(ifbstream& in, ringbuffer& buf,
             std::ostream& output=std::cout,
-            bool fixedtree=false);
+            bool fixedcode=false);
 
     void gunzip(std::string fn, std::ostream& output=std::cout);
 
@@ -52,8 +56,8 @@ namespace inflate {
 
         class teeprint; // for debugging purposes
     }
-
 }
+
 
 struct inflate::gzip_header {
   unsigned char id[ 2 ];
@@ -89,6 +93,17 @@ struct inflate::_UTIL::Coderow {  // Essentially a named std::pair
     unsigned int bit_length;
     inflate::Code code;
 };
+
+class inflate::Decodertype {
+public:
+    virtual void insert(int codelen, inflate::Code, inflate::Symbol) = 0;
+    virtual inflate::Symbol read_out(ifbstream& in) const = 0;
+    virtual inline bool empty() const noexcept = 0;
+    virtual std::string str() = 0;
+};
+
+// Decoder implementation
+#include "huffmantree.h"
 
 #ifdef DEBUG_INFGEN_OUTPUT
 class inflate::_UTIL::teeprint {

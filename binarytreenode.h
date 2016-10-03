@@ -1,6 +1,7 @@
 #ifndef BINARYTREENODE_H
 #define BINARYTREENODE_H
 
+#include <functional>
 #include <string>
 
 // Serialize a general binary tree with preorder traversal
@@ -61,16 +62,24 @@ public:
     BinaryTreeNode(int value=0):
         value(value),left(nullptr),right(nullptr) {}
 
-    BinaryTreeNode(const std::string data, const std::string delimiter="#"):
-        BinaryTreeNode(*deserialize<BinaryTreeNode>(data, delimiter)) {}
+    BinaryTreeNode(
+            const std::string data, const std::string delimiter="#");
 
-    BinaryTreeNode* insert_left(int value) {
-        return left = new BinaryTreeNode(value);
-    }
-
-    BinaryTreeNode* insert_right(int value) {
-        return right = new BinaryTreeNode(value);
-    }
+    BinaryTreeNode* insert_left(int value);
+    BinaryTreeNode* insert_right(int value);
 };
+
+BinaryTreeNode::BinaryTreeNode(
+            const std::string data, const std::string delimiter)
+        : BinaryTreeNode(*deserialize<BinaryTreeNode>(data, delimiter)) {
+}
+
+BinaryTreeNode* BinaryTreeNode::insert_left(int value) {
+    return left = new BinaryTreeNode(value);
+}
+
+BinaryTreeNode* BinaryTreeNode::insert_right(int value) {
+    return right = new BinaryTreeNode(value);
+}
 
 #endif

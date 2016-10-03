@@ -67,12 +67,12 @@ std::vector<int> inflate::_UTIL::count_by_bitlength(
 }
 
 
-inflate::Node* inflate::build_tree(
+inflate::Decoder inflate::build_decoder(
         const std::vector<inflate::Range>& ranges) {
-/* Build a huffman tree from the canonical huffman code ranges */
-    if (ranges.empty()) return nullptr;
+/* Build a decoder from the canonical huffman code ranges */
+    inflate::Decoder decoder;
+    if (ranges.empty()) return decoder;
 
-    inflate::Node* root;
     std::vector<int> numrows;
     std::vector<inflate::Code>nextcodes;
     std::vector<inflate::_UTIL::Coderow> codebook;
@@ -121,77 +121,18 @@ inflate::Node* inflate::build_tree(
     }
 #endif
     
-    // build tree from codebook
-    root = new inflate::Node({-1, nullptr, nullptr});
+    // invert codebook into decoder
     inflate::Symbol symbol = 0;
     for (auto& row : codebook) {
         if (row.bit_length < 1) {  // skip empty lines
             symbol++;
-            continue;
         }
-        inflate::Node* curr = root;
-        // read code bit by bit
-        for( int i = row.bit_length - 1; i >= 0; i--){
-            if ((row.code >> i) & 0x01) {  // 1
-                if (curr->one == nullptr) {
-                    curr->one = new inflate::Node({-1, nullptr, nullptr});
-                }
-                curr = curr->one;
-            }
-            else {  // 0
-                if (curr->zero == nullptr) {
-                    curr->zero = new inflate::Node({-1, nullptr, nullptr});
-                }
-                curr = curr->zero;
-            }
+        else {
+            decoder.insert(row.bit_length, row.code, symbol++);
         }
-        curr->symbol = symbol++;
     }
-    return root;
+    return decoder;
 }
-
-
-inflate::Symbol inflate::read_out(
-        inflate::Node* huffman_tree, ifbstream& in) {
-/*Decode a single symbol from stream in, using the huffman_tree*/
-    inflate::Node* curr = huffman_tree;
-    inflate::Symbol symbol = curr->symbol;
-#ifdef DEBUG_DUMP_CODES
-    std::cout << std::endl;
-    std::ostringstream buf;
-#endif
-    
-    while(symbol < 0) {
-        if (in.next()) {  // next bit is 1
-#ifdef DEBUG_DUMP_CODES
-            buf << 1;
-#endif
-            curr = curr->one;
-        }
-        else {           // next bit is 0
-#ifdef DEBUG_DUMP_CODES
-            buf << 0;
-#endif
-            curr = curr->zero;
-        }
-
-        if (curr == nullptr){  // this leaf has code -1 probably
-#ifdef DEBUG_DUMP_CODES
-            std::cout << buf.str();
-#endif
-            throw std::invalid_argument("Malformed tree, unindexed code");
-        }
-        symbol = curr->symbol;
-    }
-#ifdef DEBUG_DUMP_CODES
-    std::cout << std::setw(15) << std::left << buf.str();
-    std::cout << " :" << std::setw(3) << symbol << " = ";
-    std::cout << std::setw(0);
-#endif
-
-    return symbol;
-}
-
 
 template <class InputIterator>
 std::vector<inflate::Range> inflate::_UTIL::group_into_ranges(
@@ -253,11 +194,11 @@ std::vector<inflate::Range> inflate::_UTIL::read_preheader(ifbstream& in){
 }
 
 
-std::pair<inflate::Node*, inflate::Node*>
+std::pair<inflate::Decoder, inflate::Decoder>
 inflate::read_deflate_header(ifbstream& in) {
     std::vector<inflate::Range> preheader_ranges;
-    inflate::Node* preheader_tree;
-    inflate::Node* literals_tree, *distance_tree;
+    inflate::Decoder preheader_dec;
+    inflate::Decoder literals_dec, distance_dec;
 
     unsigned int bit_length;
     std::vector<unsigned int> lengths;
@@ -275,20 +216,19 @@ inflate::read_deflate_header(ifbstream& in) {
     #endif
 #endif
 
-    
     lengths.reserve(hlit + hdist + 258);
 
     preheader_ranges = inflate::_UTIL::read_preheader(in);
-    preheader_tree = build_tree(preheader_ranges);
+    preheader_dec = build_decoder(preheader_ranges);
 
 
     for(inflate::Symbol symbol=0; symbol < (hlit + hdist + 258); symbol++){
         try {
-            bit_length = inflate::read_out(preheader_tree, in);
+            bit_length = preheader_dec.read_out(in);
         }
         catch (std::invalid_argument& e) {
             throw std::invalid_argument(
-                    "Preheader Tree Invalid: negative leaf symbol");
+                    "Preheader Code Invalid: unindexed code");
         }
         if (bit_length > 15) {  // repeat symbol
 #ifdef DEBUG_INFGEN_OUTPUT_D
@@ -318,8 +258,8 @@ inflate::read_deflate_header(ifbstream& in) {
 #endif
                 break;
             default:
-                throw std::invalid_argument(
-                        "Preheader Tree Invalid: symbol too large");
+                throw std::runtime_error(
+                        "Preheader Decoder Invalid: symbol too large");
             }
             symbol += repeat - 1;
         }
@@ -358,7 +298,7 @@ inflate::read_deflate_header(ifbstream& in) {
     }
 #endif
 
-    literals_tree = inflate::build_tree(literals_ranges);
+    literals_dec = inflate::build_decoder(literals_ranges);
 
     auto distance_ranges = inflate::_UTIL::group_into_ranges(
             lengths.begin() + (hlit + 257), lengths.end());
@@ -384,9 +324,9 @@ inflate::read_deflate_header(ifbstream& in) {
     }
 #endif
 
-    distance_tree = inflate::build_tree(distance_ranges);
+    distance_dec = inflate::build_decoder(distance_ranges);
     
-    return std::make_pair(literals_tree, distance_tree);
+    return std::make_pair(literals_dec, distance_dec);
 }
 
 #ifdef DEBUG_INFGEN_OUTPUT
@@ -429,15 +369,15 @@ void inflate::_UTIL::teeprint::operator()(teestream& out,
 #endif
 
 ringbuffer& inflate::inflate_block(ifbstream& in,
-        std::ostream& output/*=std::cout*/, bool fixedtree/*=false*/) {
+        std::ostream& output/*=std::cout*/, bool fixedcode/*=false*/) {
     ringbuffer buf(inflate::max_buffer_size);
-    return inflate::inflate_block(in, buf, output, fixedtree);
+    return inflate::inflate_block(in, buf, output, fixedcode);
 }
 
 ringbuffer& inflate::inflate_block(ifbstream& in, 
         ringbuffer& buf,
         std::ostream& output/*=std::cout*/, 
-        bool fixedtree/*=false*/) {
+        bool fixedcode/*=false*/) {
     teestream teeout(output, buf);
 
     static const int extra_length_addend[] = {
@@ -449,21 +389,21 @@ ringbuffer& inflate::inflate_block(ifbstream& in,
         192, 256, 384, 512, 768, 1024, 1536, 2048,
         3072, 4096, 6144, 8192, 12288, 16384, 24576
     };
-    inflate::Node* literals_tree, *distance_tree;
+    inflate::Decoder literals_dec, distance_dec;
 
-    if (!fixedtree) {
-        std::tie(literals_tree, distance_tree) = read_deflate_header(in);
+    if (!fixedcode) {
+        std::tie(literals_dec, distance_dec) = read_deflate_header(in);
     }
     else {
-        literals_tree = build_tree(inflate::fixedranges);
-        distance_tree = nullptr;
+        literals_dec = build_decoder(inflate::fixedranges);
+        distance_dec;
     }
 #ifdef DEBUG_INFGEN_OUTPUT
     inflate::_UTIL::teeprint infgen_print;    
 #endif
 
     while(true) {
-        inflate::Symbol symbol = read_out(literals_tree, in);
+        inflate::Symbol symbol = literals_dec.read_out(in);
         if(symbol < 256) {
 #ifdef DEBUG_INFGEN_OUTPUT
             infgen_print(teeout, buf, symbol);
@@ -489,11 +429,11 @@ ringbuffer& inflate::inflate_block(ifbstream& in,
             }
 
             // read the distance code
-            if (distance_tree == nullptr) {
+            if (distance_dec.empty()) {
                 distance = in.read(5);
             }
             else {
-                distance = read_out(distance_tree, in);
+                distance = distance_dec.read_out(in);
             }
 
             if (distance < 30) {
@@ -593,7 +533,7 @@ void inflate::gunzip(std::string fn, std::ostream& output/*=std::cout*/) {
                         "Uncompressed block type not implemented");
                 break;
             case 0x01:
-                inflate_block(bin, buf, output, true); // fixedtree = true
+                inflate_block(bin, buf, output, true); // fixedcode = true
                 break;
             case 0x02:
 #ifdef DEBUG_INFGEN_OUTPUT
